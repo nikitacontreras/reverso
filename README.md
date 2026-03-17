@@ -26,5 +26,3 @@
 *   ¡Ganas de dejar de pelearte con los comandos `ssh -L`!
 
 ---
-
-**Hecho con ❤️ por Nikita Strike.**
