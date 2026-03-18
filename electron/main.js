@@ -622,8 +622,10 @@ ipcMain.on('ssh:shell-start', (event, { connectionId, shellId }) => {
             }
 
             // Run injection: PS1, aliases, and a quick system info summary (MotD), then clear screen nicely.
-            const motd = `echo -e "\\e[1;32mConnected successfully!\\e[0m"; echo "🟢 Uptime: $(uptime -p 2>/dev/null || echo 'Unknown') | 💾 Ram Free: $(free -m 2>/dev/null | awk '/Mem:/ {print $4}' || echo 'N/A') MB"`;
-            const injectScript = `\nexport PS1="${ps1}"; ${aliasesStr} clear; ${motd};\n`;
+            // Using a leading space ignores the command from bash history on most setups. 
+            // Removed '!' from echo to prevent bash history expansion errors (event not found).
+            const motd = `echo -e '\\e[1;32mConnected successfully.\\e[0m'; echo "🟢 Uptime: $(uptime -p 2>/dev/null || echo 'Unknown') | 💾 Ram Free: $(free -m 2>/dev/null | awk '/Mem:/ {print $4}' || echo 'N/A') MB"`;
+            const injectScript = ` export PS1="${ps1}"; ${aliasesStr} clear; ${motd};\n`;
             stream.write(injectScript);
         } catch (err) {
             console.error('[Shell Injection Error]:', err);
