@@ -1,5 +1,5 @@
-import React from 'react';
-import { ToggleRight, ToggleLeft, Trash2, Link as LinkIcon, ChevronRight, Plus } from 'lucide-react';
+import React, { useState } from 'react';
+import { ToggleRight, ToggleLeft, Trash2, Edit2, Link as LinkIcon, ChevronRight, Plus, Zap, RefreshCw, Loader, X } from 'lucide-react';
 
 const MappingsTab = ({
     currentConn,
@@ -7,8 +7,36 @@ const MappingsTab = ({
     setTunnelForm,
     onToggleTunnel,
     onDeleteTunnel,
-    onCreateTunnel
+    onCreateTunnel,
+    onEditTunnel,
+    editingTunnelId,
+    setEditingTunnelId
 }) => {
+    const [isDetecting, setIsDetecting] = useState(false);
+    const [detectedServices, setDetectedServices] = useState([]);
+
+    const detectServices = async () => {
+        if (!currentConn || currentConn.status !== 'connected') return;
+        setIsDetecting(true);
+        try {
+            const result = await window.electronAPI.detectServices(currentConn.id);
+            if (result.success) {
+                setDetectedServices(result.services || []);
+            }
+        } catch (err) {
+            console.error('Detection failed', err);
+        } finally {
+            setIsDetecting(false);
+        }
+    };
+
+    const addDetectedTunnel = (port) => {
+        setTunnelForm({
+            remoteHost: '127.0.0.1',
+            remotePort: port.toString(),
+            localPort: port.toString()
+        });
+    };
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div className="card" style={{ marginBottom: 0 }}>
@@ -57,6 +85,13 @@ const MappingsTab = ({
                                     <button
                                         className="btn"
                                         style={{ padding: '8px', backgroundColor: 'transparent', color: 'var(--text-secondary)', border: 'none' }}
+                                        onClick={(e) => { e.stopPropagation(); onEditTunnel(t.id); }}
+                                    >
+                                        <Edit2 size={16} />
+                                    </button>
+                                    <button
+                                        className="btn"
+                                        style={{ padding: '8px', backgroundColor: 'transparent', color: 'var(--text-secondary)', border: 'none' }}
                                         onClick={(e) => { e.stopPropagation(); onDeleteTunnel(t.id); }}
                                     >
                                         <Trash2 size={16} />
@@ -69,7 +104,53 @@ const MappingsTab = ({
             </div>
 
             <div className="card">
-                <h3 style={{ fontSize: '14px', marginBottom: '20px' }}>Add New Mapping</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                    <h3 style={{ fontSize: '14px', margin: 0 }}>Add New Mapping</h3>
+                    {currentConn.status === 'connected' && (
+                        <button
+                            className="btn btn-secondary"
+                            style={{ padding: '4px 12px', fontSize: '12px', border: 'none', backgroundColor: 'rgba(10, 132, 255, 0.1)', color: 'var(--accent)' }}
+                            onClick={detectServices}
+                            disabled={isDetecting}
+                        >
+                            {isDetecting ? <Loader size={14} className="spin" /> : <Zap size={14} />}
+                            {isDetecting ? 'Scanning...' : 'Magic Mapping'}
+                        </button>
+                    )}
+                </div>
+
+                {detectedServices.length > 0 && (
+                    <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: 'rgba(10, 132, 255, 0.05)', borderRadius: '8px', border: '1px solid rgba(10, 132, 255, 0.1)' }}>
+                        <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--accent)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', justifyContent: 'space-between' }}>
+                            Detected Services
+                            <button onClick={() => setDetectedServices([])} style={{ border: 'none', background: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '10px' }}>Clear</button>
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                            {detectedServices.map(service => (
+                                <button
+                                    key={service.port}
+                                    onClick={() => addDetectedTunnel(service.port)}
+                                    className="btn"
+                                    style={{
+                                        padding: '6px 12px',
+                                        fontSize: '11px',
+                                        backgroundColor: 'var(--card-bg)',
+                                        borderColor: 'var(--border-color)',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: 'flex-start',
+                                        gap: '2px',
+                                        minWidth: '80px'
+                                    }}
+                                >
+                                    <span style={{ fontWeight: '700', color: 'var(--text-primary)' }}>Port {service.port}</span>
+                                    <span style={{ fontSize: '9px', opacity: 0.7, color: 'var(--accent)' }}>{service.name}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
                 <form onSubmit={onCreateTunnel} style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'flex-end' }}>
                     <div className="input-group" style={{ marginBottom: 0, flex: '2 1 200px' }}>
                         <label style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Host</label>
@@ -84,8 +165,22 @@ const MappingsTab = ({
                         <input type="number" placeholder="8080" value={tunnelForm.localPort} onChange={e => setTunnelForm({ ...tunnelForm, localPort: e.target.value })} required />
                     </div>
                     <button type="submit" className="btn btn-primary" style={{ height: '40px', padding: '0 20px', flexShrink: 0 }}>
-                        <Plus size={16} /> Add Mapping
+                        {editingTunnelId ? <RefreshCw size={16} /> : <Plus size={16} />}
+                        {editingTunnelId ? 'Update Mapping' : 'Add Mapping'}
                     </button>
+                    {editingTunnelId && (
+                        <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ height: '40px', padding: '0 12px' }}
+                            onClick={() => {
+                                setEditingTunnelId(null);
+                                setTunnelForm({ remoteHost: '127.0.0.1', remotePort: '', localPort: '' });
+                            }}
+                        >
+                            <X size={16} />
+                        </button>
+                    )}
                 </form>
             </div>
         </div>

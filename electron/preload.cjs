@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sftpReaddir: (data) => ipcRenderer.invoke('sftp:readdir', data),
     ping: (host) => ipcRenderer.invoke('ssh:ping', host),
     getActiveTunnels: () => ipcRenderer.invoke('tunnels:get-all'),
+    detectServices: (connectionId) => ipcRenderer.invoke('ssh:detect-services', connectionId),
 
     // Terminal and Events
     startShell: (data) => ipcRenderer.send('ssh:shell-start', data),
@@ -34,5 +35,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
         const listener = (event, data) => callback(data);
         ipcRenderer.on('ssh:error', listener);
         return () => ipcRenderer.removeListener('ssh:error', listener);
+    },
+
+    // Import/Export
+    configExport: (data) => ipcRenderer.invoke('config:export', data),
+    configImportPickFile: () => ipcRenderer.invoke('config:import-pick-file'),
+    configImportExecute: (data) => ipcRenderer.invoke('config:import-execute'),
+    getTunnelStats: () => ipcRenderer.invoke('tunnels:get-stats'),
+    onNetworkEvent: (callback) => {
+        const listener = (event, data) => callback(data);
+        ipcRenderer.on('network:event', listener);
+        return () => ipcRenderer.removeListener('network:event', listener);
     },
 });

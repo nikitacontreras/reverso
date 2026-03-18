@@ -18,33 +18,47 @@ export default function TerminalView({ connectionId, shellId, active }) {
             theme: {
                 background: '#1c1c1e',
                 foreground: '#f5f5f7',
+                selectionBackground: 'rgba(255, 255, 255, 0.15)',
             },
+            allowProposedApi: true,
+            scrollback: 10000,
         });
 
-        term.loadAddon(fitAddonRef.current);
+        const fitAddon = new FitAddon();
+        term.loadAddon(fitAddon);
         term.open(terminalRef.current);
 
-        // Initial fit and sync
-        setTimeout(() => {
-            if (terminalRef.current) {
-                fitAddonRef.current.fit();
-                window.electronAPI.resizeShell({
-                    connectionId,
-                    shellId,
-                    rows: term.rows,
-                    cols: term.cols
-                });
-            }
-        }, 50);
-
         xtermRef.current = term;
+        fitAddonRef.current = fitAddon;
+
+        // Force a fit on connection
+        const performFit = () => {
+            if (terminalRef.current && active) {
+                try {
+                    fitAddon.fit();
+                    window.electronAPI.resizeShell({
+                        connectionId,
+                        shellId,
+                        rows: term.rows,
+                        cols: term.cols
+                    });
+                } catch (e) {
+                    console.warn('Fit failed', e);
+                }
+            }
+        };
+
+        // Efficient resize observer
+        const resizeObserver = new ResizeObserver(() => {
+            requestAnimationFrame(performFit);
+        });
+
+        if (terminalRef.current) {
+            resizeObserver.observe(terminalRef.current);
+        }
 
         term.onData(data => {
             window.electronAPI.sendShellData({ connectionId, shellId, data });
-        });
-
-        term.onResize(({ cols, rows }) => {
-            window.electronAPI.resizeShell({ connectionId, shellId, rows, cols });
         });
 
         const handleData = (payload) => {
@@ -56,48 +70,40 @@ export default function TerminalView({ connectionId, shellId, active }) {
         const removeShellDataListener = window.electronAPI.onShellData(handleData);
         window.electronAPI.startShell({ connectionId, shellId });
 
-        const handleResize = () => {
-            if (active) {
-                fitAddonRef.current.fit();
-            }
-        };
-
-        window.addEventListener('resize', handleResize);
-
         return () => {
-            window.removeEventListener('resize', handleResize);
+            resizeObserver.disconnect();
             if (removeShellDataListener) removeShellDataListener();
             term.dispose();
         };
-    }, [connectionId, shellId]);
+    }, [connectionId, shellId]); // Removed 'active' from deps because ResizeObserver handles it
 
     useEffect(() => {
-        if (active && xtermRef.current) {
-            // Re-fit when tab becomes active
+        if (active && xtermRef.current && fitAddonRef.current) {
+            // Re-fit when tab becomes active (switching tabs)
             setTimeout(() => {
-                if (terminalRef.current) {
-                    fitAddonRef.current.fit();
-                    window.electronAPI.resizeShell({
-                        connectionId,
-                        shellId,
-                        rows: xtermRef.current.rows,
-                        cols: xtermRef.current.cols
-                    });
-                }
+                fitAddonRef.current.fit();
+                window.electronAPI.resizeShell({
+                    connectionId,
+                    shellId,
+                    rows: xtermRef.current.rows,
+                    cols: xtermRef.current.cols
+                });
             }, 50);
         }
-    }, [active, shellId]);
+    }, [active]);
 
     return (
-        <div
-            ref={terminalRef}
-            style={{
-                flex: 1,
-                backgroundColor: '#1c1c1e',
-                borderRadius: '8px',
-                padding: '8px',
-                overflow: 'hidden'
-            }}
-        />
+        <div style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: '#1c1c1e', minHeight: 0 }}>
+            <div
+                ref={terminalRef}
+                style={{
+                    flex: 1,
+                    width: '100%',
+                    height: '100%',
+                    padding: '8px',
+                    overflow: 'hidden'
+                }}
+            />
+        </div>
     );
 }

@@ -1,18 +1,22 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
-import { exec } from 'child_process';
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import net from 'net';
+import crypto from 'crypto';
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, dialog } from 'electron';
+import { exec } from 'child_process';
 import isDev from 'electron-is-dev';
 import { fileURLToPath } from 'url';
 import { Client } from 'ssh2';
-import net from 'net';
-import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const configPath = path.join(app.getPath('userData'), 'config.json');
 
 let mainWindow;
-const activeConnections = new Map(); // id -> { client, tunnels: Map, shellStream }
+let tray = null;
+const activeConnections = new Map(); // id -> { client, tunnels: Map, shellStream, distro, sshPort }
+const tunnelTraffic = new Map(); // tunnelId -> { up, down, lastUpdate }
 
 // SILENCE POPUPS: Capture uncaught exceptions to prevent Electron's error dialog
 process.on('uncaughtException', (error) => {
@@ -45,7 +49,7 @@ ipcMain.handle('config:load', async () => {
     } catch (err) {
         console.error('Failed to load config', err);
     }
-    return { connections: [], settings: { runAtStartup: false, maxRetries: 3 } };
+    return { connections: [], groups: [], settings: { runAtStartup: false, maxRetries: 3 } };
 });
 
 ipcMain.handle('settings:set-startup', async (event, shouldRun) => {
@@ -59,6 +63,148 @@ ipcMain.handle('settings:set-startup', async (event, shouldRun) => {
 ipcMain.handle('settings:get-startup', async () => {
     return app.getLoginItemSettings().openAtLogin;
 });
+
+// Encryption Utilities for Export/Import
+const ALGORITHM = 'aes-256-cbc';
+const IV_LENGTH = 16;
+
+function encrypt(text, password) {
+    const salt = crypto.randomBytes(16);
+    const key = crypto.scryptSync(password, salt, 32);
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+    let encrypted = cipher.update(text, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    return salt.toString('hex') + ':' + iv.toString('hex') + ':' + encrypted;
+}
+
+function decrypt(text, password) {
+    const [saltHex, ivHex, encrypted] = text.split(':');
+    const salt = Buffer.from(saltHex, 'hex');
+    const iv = Buffer.from(ivHex, 'hex');
+    const key = crypto.scryptSync(password, salt, 32);
+    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+}
+
+ipcMain.handle('config:export', async (event, { connectionIds, password }) => {
+    const { filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: 'Export Reverso Configuration',
+        defaultPath: path.join(os.homedir(), 'reverso-export.json'),
+        filters: [{ name: 'JSON', extensions: ['json'] }]
+    });
+
+    if (!filePath) return { success: false, error: 'Cancelled' };
+
+    try {
+        const configData = fs.readFileSync(configPath, 'utf8');
+        const fullConfig = JSON.parse(configData);
+
+        // Filter connections
+        const selectedConns = fullConfig.connections.filter(c => connectionIds.includes(c.id));
+
+        // Filter groups to only include referenced connections
+        const selectedGroups = (fullConfig.groups || []).map(g => ({
+            ...g,
+            connectionIds: g.connectionIds.filter(id => connectionIds.includes(id))
+        })).filter(g => g.connectionIds.length > 0);
+
+        // Encrypt passwords in selected connections
+        const exportedConns = selectedConns.map(c => {
+            const encryptedPassword = c.password ? encrypt(c.password, password) : '';
+            return { ...c, password: encryptedPassword, isEncrypted: !!c.password };
+        });
+
+        const exportPayload = {
+            version: '1.0',
+            exportedAt: new Date().toISOString(),
+            connections: exportedConns,
+            groups: selectedGroups
+        };
+
+        fs.writeFileSync(filePath, JSON.stringify(exportPayload, null, 2));
+        return { success: true };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+ipcMain.handle('config:import-pick-file', async () => {
+    const { filePaths } = await dialog.showOpenDialog(mainWindow, {
+        title: 'Import Reverso Configuration',
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+        properties: ['openFile']
+    });
+    if (!filePaths || filePaths.length === 0) return null;
+    try {
+        const data = fs.readFileSync(filePaths[0], 'utf8');
+        return JSON.parse(data);
+    } catch (err) {
+        throw new Error('Invalid export file');
+    }
+});
+
+ipcMain.handle('config:import-execute', async (event, { data, password, connectionIds }) => {
+    try {
+        const connsToImport = data.connections.filter(c => connectionIds.includes(c.id));
+
+        const decryptedConns = connsToImport.map(c => {
+            let decryptedPass = c.password;
+            if (c.isEncrypted && c.password) {
+                try {
+                    decryptedPass = decrypt(c.password, password);
+                } catch (e) {
+                    throw new Error(`Failed to decrypt password for ${c.name}. Incorrect password?`);
+                }
+            }
+            const { isEncrypted, ...rest } = c;
+            return { ...rest, password: decryptedPass };
+        });
+
+        return { success: true, decryptedConnections: decryptedConns, groups: data.groups };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+function createTray() {
+    if (tray) return;
+
+    // Use a simple circle as a placeholder icon if no icon.png exists
+    const icon = nativeImage.createEmpty();
+    tray = new Tray(icon);
+
+    updateTrayMenu();
+
+    tray.on('click', () => {
+        if (mainWindow) {
+            mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show();
+        }
+    });
+}
+
+function updateTrayMenu() {
+    if (!tray) return;
+
+    const connectedCount = activeConnections.size;
+    const tunnelCount = Array.from(activeConnections.values()).reduce((acc, c) => acc + (c.tunnels?.size || 0), 0);
+
+    const template = [
+        { label: `Reverso - ${connectedCount} Active`, enabled: false },
+        { label: `${tunnelCount} Tunnels Running`, enabled: false },
+        { type: 'separator' },
+        { label: 'Show Window', click: () => { mainWindow.show(); } },
+        { label: 'Hide to Tray', click: () => { mainWindow.hide(); } },
+        { type: 'separator' },
+        { label: 'Quit Reverso', click: () => { app.quit(); } }
+    ];
+
+    const contextMenu = Menu.buildFromTemplate(template);
+    tray.setContextMenu(contextMenu);
+    tray.setToolTip(`Reverso (${connectedCount} connected)`);
+}
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -82,12 +228,19 @@ function createWindow() {
 
     mainWindow.once('ready-to-show', () => {
         mainWindow.show();
+        createTray();
     });
 
-    // DevTools disabled as requested by user's previous manual edit
+    mainWindow.on('close', (event) => {
+        if (process.platform === 'darwin' && !app.isQuitting) {
+            event.preventDefault();
+            mainWindow.hide();
+        }
+    });
 }
 
 app.whenReady().then(createWindow);
+app.on('before-quit', () => app.isQuitting = true);
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
@@ -139,11 +292,24 @@ ipcMain.handle('ssh:connect', async (event, config) => {
                         if (idMatch) {
                             distro = idMatch[1].replace(/['"]/g, '').toLowerCase();
                         }
-                        activeConnections.set(config.id, { client: conn, tunnels: new Map(), distro });
+                        activeConnections.set(config.id, {
+                            client: conn,
+                            tunnels: new Map(),
+                            distro,
+                            sshPort: parseInt(config.port) || 22,
+                            config
+                        });
+                        updateTrayMenu();
                         resolve({ success: true, distro });
                     });
                 } else {
-                    activeConnections.set(config.id, { client: conn, tunnels: new Map(), distro });
+                    activeConnections.set(config.id, {
+                        client: conn,
+                        tunnels: new Map(),
+                        distro,
+                        sshPort: parseInt(config.port) || 22,
+                        config
+                    });
                     resolve({ success: true, distro });
                 }
             });
@@ -160,6 +326,7 @@ ipcMain.handle('ssh:connect', async (event, config) => {
                 }
             }
             activeConnections.delete(config.id);
+            updateTrayMenu();
             if (mainWindow) {
                 mainWindow.webContents.send('ssh:error', { id: config.id, message: 'Connection closed' });
             }
@@ -194,6 +361,7 @@ ipcMain.handle('ssh:disconnect', async (event, connectionId) => {
         }
         connection.client.end();
         activeConnections.delete(connectionId);
+        updateTrayMenu();
         return { success: true };
     }
     return { success: false };
@@ -207,62 +375,94 @@ ipcMain.handle('tunnel:create', async (event, { connectionId, remoteHost, remote
 
     const targetHost = remoteHost || '127.0.0.1';
     const activeSockets = new Set();
+    const tunnelId = `${targetHost}:${rPort}:${lPort}`;
 
     return new Promise((resolve) => {
         const server = net.createServer((sock) => {
-            // Safety Check: Verify SSH client is still valid
             if (!connection.client) {
                 sock.end();
                 return;
             }
 
             activeSockets.add(sock);
-            sock.on('close', () => activeSockets.delete(sock));
 
-            try {
-                // Use sock.remoteAddress/Port to provide authentic source info to the SSH server
-                connection.client.forwardOut('127.0.0.1', 0, targetHost, rPort, (err, stream) => {
-                    if (err) {
-                        console.error(`[Tunnel Error] forwardOut (Target: ${targetHost}:${rPort}):`, err.message);
-                        sock.destroy();
-                        return;
+            connection.client.forwardOut('127.0.0.1', 0, targetHost, rPort, (err, stream) => {
+                if (err) {
+                    if (mainWindow) {
+                        mainWindow.webContents.send('network:event', {
+                            type: 'error',
+                            message: `[Tunnel Error] ${targetHost}:${rPort}: ${err.message}`,
+                            tunnelId: tunnelId,
+                            time: new Date().toLocaleTimeString()
+                        });
                     }
+                    sock.end();
+                    return;
+                }
 
-                    // Explicit bi-directional piping
-                    sock.pipe(stream);
-                    stream.pipe(sock);
-
-                    stream.on('error', (e) => {
-                        console.error(`[Tunnel Stream Error] ${targetHost}:${rPort}:`, e.message);
-                        sock.destroy();
+                if (mainWindow) {
+                    mainWindow.webContents.send('network:event', {
+                        type: 'info',
+                        message: `[Connected] ${targetHost}:${rPort}`,
+                        tunnelId: tunnelId,
+                        time: new Date().toLocaleTimeString()
                     });
+                }
 
-                    sock.on('error', (e) => {
-                        console.error(`[Socket Error] ${targetHost}:${rPort}:`, e.message);
-                        stream.destroy();
-                    });
+                // DATA FLOW: This must be as direct as possible
+                sock.pipe(stream);
+                stream.pipe(sock);
 
-                    stream.on('close', () => sock.destroy());
-                    sock.on('close', () => stream.destroy());
+                stream.on('data', (chunk) => {
+                    const stats = tunnelTraffic.get(tunnelId);
+                    if (stats) stats.down += chunk.length;
                 });
-            } catch (forwardErr) {
-                console.error(`[Tunnel Exception] ${targetHost}:${rPort}:`, forwardErr.message);
-                sock.destroy();
-            }
+
+                sock.on('data', (chunk) => {
+                    const stats = tunnelTraffic.get(tunnelId);
+                    if (stats) stats.up += chunk.length;
+                });
+
+                stream.on('close', () => {
+                    activeSockets.delete(sock);
+                    sock.end();
+                });
+
+                sock.on('close', () => {
+                    activeSockets.delete(sock);
+                    stream.end();
+                });
+
+                stream.on('error', () => {
+                    sock.destroy();
+                });
+
+                sock.on('error', () => {
+                    stream.destroy();
+                });
+            });
         });
 
         server.on('error', (err) => {
-            console.error(`[Server Error] Port ${lPort} failed:`, err.message);
             resolve({ success: false, error: err.message });
         });
 
         server.listen(lPort, '127.0.0.1', () => {
-            const tunnelId = `${targetHost}:${rPort}:${lPort}`;
-            // Store server and its active sockets for total cleanup
-            connection.tunnels.set(tunnelId, { server, activeSockets });
+            tunnelTraffic.set(tunnelId, { up: 0, down: 0, lastUpdate: Date.now() });
+            connection.tunnels.set(tunnelId, { server, activeSockets, remoteHost: targetHost, remotePort: rPort, localPort: lPort });
+            updateTrayMenu();
             resolve({ success: true, tunnelId });
         });
     });
+});
+
+ipcMain.handle('tunnels:get-stats', async () => {
+    const stats = {};
+    tunnelTraffic.forEach((value, key) => {
+        stats[key] = { ...value };
+        // Reset counters for delta calculation if needed, or keep cumulative
+    });
+    return stats;
 });
 
 ipcMain.handle('tunnel:close', async (event, { connectionId, tunnelId }) => {
@@ -277,9 +477,114 @@ ipcMain.handle('tunnel:close', async (event, { connectionId, tunnelId }) => {
         }
         server.close();
         connection.tunnels.delete(tunnelId);
+        updateTrayMenu();
         return { success: true };
     }
     return { success: false };
+});
+
+// Magic Mapping: Compatible Service Detection & Identification
+ipcMain.handle('ssh:detect-services', async (event, connectionId) => {
+    const conn = activeConnections.get(connectionId);
+    if (!conn) return { success: false, error: 'Not connected' };
+
+    const commonPorts = {
+        80: 'HTTP', 443: 'HTTPS', 3000: 'React/Node', 3306: 'MySQL', 5432: 'PostgreSQL',
+        6379: 'Redis', 8080: 'Dev/Java', 8000: 'API/PHP', 9000: 'PHP-FPM', 27017: 'MongoDB',
+        1433: 'MSSQL', 9200: 'ES', 5000: 'Flask/Docker'
+    };
+
+    return new Promise((resolve) => {
+        // Step 1: Get ports and inodes from /proc/net/tcp
+        // We look for listening sockets (state 0A)
+        const cmd = 'cat /proc/net/tcp /proc/net/tcp6 2>/dev/null';
+        conn.client.exec(cmd, (err, stream) => {
+            if (err) return resolve({ success: false, error: err.message });
+
+            let data = '';
+            stream.on('data', (chunk) => { data += chunk; });
+            stream.on('close', async () => {
+                const foundItems = []; // { port, inode }
+                const lines = data.split('\n');
+
+                lines.forEach(line => {
+                    // Match local_address and inode. Format: sl local_address rem_address state ... inode
+                    // Example: " 0: 00000000:0050 00000000:0000 0A ... 12345"
+                    const match = line.match(/^\s*\d+:\s+[0-9A-F]+:([0-9A-F]+)\s+[0-9A-F]+:[0-9A-F]+\s+0A\s+.*?\s+(\d+)\s*$/);
+                    if (match) {
+                        const port = parseInt(match[1], 16);
+                        const inode = match[2];
+                        // Filter out the current SSH port to avoid self-mapping loops
+                        if (port > 0 && port < 65535 && port !== conn.sshPort) {
+                            foundItems.push({ port, inode });
+                        }
+                    }
+                });
+
+                if (foundItems.length === 0) return resolve({ success: true, services: [] });
+
+                // Step 2: For each inode, find the process name using /proc/[pid]/fd
+                // Use a single command to find all pids/names for these inodes to be efficient
+                // This command finds the link to the socket and then gets the cmdline of that PID
+                const inodeList = foundItems.map(i => i.inode).join('|');
+                const findCmd = `for i in /proc/[0-9]*/fd/*; do 
+                    link=$(readlink "$i" 2>/dev/null);
+                    if [[ "$link" =~ socket:\\[(${inodeList})\\] ]]; then
+                        pid=$(echo "$i" | cut -d/ -f3);
+                        name=$(cat /proc/$pid/comm 2>/dev/null || cat /proc/$pid/cmdline 2>/dev/null | tr '\\0' ' ' | cut -d' ' -f1 | xargs basename 2>/dev/null);
+                        inode_id=$(echo "$link" | sed 's/socket:\\[\\(.*\\)\\]/\\1/');
+                        echo "$inode_id:$name";
+                    fi
+                done 2>/dev/null`;
+
+                conn.client.exec(findCmd, (err2, stream2) => {
+                    let nameData = '';
+                    if (!err2) {
+                        stream2.on('data', (chunk) => { nameData += chunk; });
+                    }
+
+                    stream2.on('close', () => {
+                        const inodeToName = {};
+                        nameData.split('\n').filter(Boolean).forEach(line => {
+                            const [ino, name] = line.split(':');
+                            if (ino && name) inodeToName[ino] = name;
+                        });
+
+                        const services = foundItems.map(item => {
+                            const procName = inodeToName[item.inode]?.toLowerCase() || '';
+                            let displayName = 'Unknown';
+
+                            // 1. Identify by Process Name (highest priority, works on any port)
+                            if (procName.includes('postgres')) displayName = 'PostgreSQL';
+                            else if (procName.includes('mysql') || procName.includes('mysqld')) displayName = 'MySQL';
+                            else if (procName.includes('redis')) displayName = 'Redis';
+                            else if (procName.includes('nginx')) displayName = 'Nginx';
+                            else if (procName.includes('apache') || procName.includes('httpd')) displayName = 'Apache';
+                            else if (procName.includes('mongod')) displayName = 'MongoDB';
+                            else if (procName.includes('docker')) displayName = 'Docker';
+                            else if (procName.includes('python')) displayName = 'Python App';
+                            else if (procName.includes('node')) displayName = 'Node.js App';
+                            else if (procName.includes('java')) displayName = 'Java App';
+                            else if (procName.includes('php')) displayName = 'PHP App';
+                            else if (procName.includes('docker')) displayName = 'Docker';
+                            else if (procName) displayName = procName.charAt(0).toUpperCase() + procName.slice(1);
+
+                            // 2. Fallback to Common Ports if process name is missing
+                            if (displayName === 'Unknown' && commonPorts[item.port]) {
+                                displayName = commonPorts[item.port];
+                            }
+
+                            return { port: item.port, name: displayName };
+                        });
+
+                        // Sort by port
+                        services.sort((a, b) => a.port - b.port);
+                        resolve({ success: true, services });
+                    });
+                });
+            });
+        });
+    });
 });
 
 // Terminal / Shell
@@ -299,6 +604,30 @@ ipcMain.on('ssh:shell-start', (event, { connectionId, shellId }) => {
         }
 
         conn.shells.set(shellId, stream);
+
+        // Inject custom prompt and aliases silently
+        try {
+            const cfg = conn.config || {};
+            const safeName = (cfg.name || cfg.host || '').replace(/['"\\]/g, '');
+            // Beautiful Prompt exactly as requested
+            const ps1 = `\\[\\e[1;36m\\][⚡ ${safeName}]\\[\\e[0m\\] \\[\\e[34m\\]\\u@\\h\\[\\e[0m\\]:\\w $ `;
+
+            // Read aliases from config.json
+            let aliasesStr = `alias logs='tail -f /var/log/syslog'; alias docker-clean='docker system prune -a';`;
+            if (fs.existsSync(configPath)) {
+                const confData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                if (confData.settings && Array.isArray(confData.settings.aliases)) {
+                    aliasesStr = confData.settings.aliases.map(a => `alias ${a.name}='${a.command.replace(/'/g, "\\'")}'`).join('; ') + ';';
+                }
+            }
+
+            // Run injection: PS1, aliases, and a quick system info summary (MotD), then clear screen nicely.
+            const motd = `echo -e "\\e[1;32mConnected successfully!\\e[0m"; echo "🟢 Uptime: $(uptime -p 2>/dev/null || echo 'Unknown') | 💾 Ram Free: $(free -m 2>/dev/null | awk '/Mem:/ {print $4}' || echo 'N/A') MB"`;
+            const injectScript = `\nexport PS1="${ps1}"; ${aliasesStr} clear; ${motd};\n`;
+            stream.write(injectScript);
+        } catch (err) {
+            console.error('[Shell Injection Error]:', err);
+        }
 
         stream.on('data', (data) => {
             if (mainWindow) {
@@ -365,6 +694,24 @@ ipcMain.handle('sftp:readdir', async (event, { connectionId, path }) => {
     });
 });
 // SFTP ... (omitted readdir for context)
+ipcMain.handle('tunnels:get-all', async () => {
+    const all = [];
+    for (const [id, conn] of activeConnections.entries()) {
+        if (!conn.tunnels) continue;
+        for (const [tunnelId, tunnel] of conn.tunnels.entries()) {
+            all.push({
+                connectionId: id,
+                tunnelId: tunnelId,
+                remoteHost: tunnel.remoteHost,
+                remotePort: tunnel.remotePort,
+                localPort: tunnel.localPort,
+                active: true
+            });
+        }
+    }
+    return all;
+});
+
 ipcMain.handle('ssh:ping', async (event, host) => {
     return new Promise((resolve) => {
         const start = Date.now();
@@ -374,22 +721,4 @@ ipcMain.handle('ssh:ping', async (event, host) => {
             resolve({ success: true, latency: Date.now() - start });
         });
     });
-});
-
-ipcMain.handle('tunnels:get-all', async () => {
-    const all = [];
-    for (const [connId, conn] of activeConnections.entries()) {
-        for (const [tunnelId, tunnel] of conn.tunnels.entries()) {
-            const [remoteHost, remotePort, localPort] = tunnelId.split(':');
-            all.push({
-                connectionId: connId,
-                tunnelId,
-                remoteHost,
-                remotePort,
-                localPort,
-                activeSockets: tunnel.activeSockets?.size || 0
-            });
-        }
-    }
-    return all;
 });

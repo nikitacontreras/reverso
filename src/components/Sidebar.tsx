@@ -3,7 +3,8 @@ import {
     Plus, Settings, Trash2, Folder, ChevronRight, ChevronDown,
     MoreVertical, Edit2, Play, Power, FolderPlus, Loader,
     Shapes, Code, Database, Globe, Cpu, Cloud, Terminal, Layers,
-    Zap, Anchor, Shield, Star, Search, LayoutDashboard, Activity
+    Zap, Anchor, Shield, Star, Search, LayoutDashboard, Activity,
+    Download, Upload, Check, ChevronLeft, Lock
 } from 'lucide-react';
 import DistroIcon from './DistroIcon';
 
@@ -29,6 +30,8 @@ const Sidebar = ({
     const [search, setSearch] = useState('');
     const [contextMenu, setContextMenu] = useState(null); // { x, y, type, id }
     const [groupModalData, setGroupModalData] = useState(null); // { title, name, icon, color, onConfirm }
+    const [exportModal, setExportModal] = useState(null); // { connections, onConfirm }
+    const [importModal, setImportModal] = useState(null); // { data, onConfirm }
     const sidebarRef = useRef(null);
 
     const iconMap = {
@@ -190,6 +193,24 @@ const Sidebar = ({
         setContextMenu(null);
     };
 
+    const handleExport = () => {
+        setExportModal({ connections: connections.map(c => ({ ...c, selected: true })) });
+    };
+
+    const handleImport = async () => {
+        try {
+            const data = await window.electronAPI.configImportPickFile();
+            if (data) {
+                setImportModal({
+                    data,
+                    connections: data.connections.map(c => ({ ...c, selected: true }))
+                });
+            }
+        } catch (err) {
+            alert(err.message);
+        }
+    };
+
     const filteredConnections = connections.filter(c =>
         c.name?.toLowerCase().includes(search.toLowerCase()) ||
         c.host?.toLowerCase().includes(search.toLowerCase()) ||
@@ -280,6 +301,13 @@ const Sidebar = ({
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <h3 style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.05em', color: 'var(--text-secondary)' }}>CONNECTIONS</h3>
                 <div style={{ display: 'flex', gap: '4px' }}>
+                    <button className="btn btn-secondary" style={{ padding: '4px', border: 'none' }} onClick={handleImport} title="Import Config">
+                        <Upload size={16} />
+                    </button>
+                    <button className="btn btn-secondary" style={{ padding: '4px', border: 'none' }} onClick={handleExport} title="Export Config">
+                        <Download size={16} />
+                    </button>
+                    <div style={{ width: '4px' }} />
                     <button className="btn btn-secondary" style={{ padding: '4px', border: 'none' }} onClick={addGroup} title="Add Group">
                         <FolderPlus size={16} />
                     </button>
@@ -424,17 +452,140 @@ const Sidebar = ({
                 </div>
             )}
 
-            {groupModalData && (
-                <GroupModal
-                    title={groupModalData.title}
-                    initialData={{ name: groupModalData.name, icon: groupModalData.icon, color: groupModalData.color }}
-                    iconMap={iconMap}
-                    colors={colors}
-                    onConfirm={groupModalData.onConfirm}
-                    onCancel={() => setGroupModalData(null)}
+            {exportModal && (
+                <ExportImportModal
+                    title="Export Connections"
+                    connections={exportModal.connections}
+                    onConfirm={async (selectedIds, password) => {
+                        const res = await window.electronAPI.configExport({ connectionIds: selectedIds, password });
+                        if (res.success) alert('Exported successfully!');
+                        else if (res.error !== 'Cancelled') alert('Export failed: ' + res.error);
+                        setExportModal(null);
+                    }}
+                    onCancel={() => setExportModal(null)}
+                    requirePassword={true}
+                    actionLabel="Export"
+                />
+            )}
+
+            {importModal && (
+                <ExportImportModal
+                    title="Import Connections"
+                    connections={importModal.connections}
+                    onConfirm={async (selectedIds, password) => {
+                        const res = await window.electronAPI.configImportExecute({
+                            data: importModal.data,
+                            password,
+                            connectionIds: selectedIds
+                        });
+                        if (res.success) {
+                            // Merge new connections and groups
+                            const newConns = [...connections];
+                            res.decryptedConnections.forEach(c => {
+                                if (!newConns.find(nc => nc.id === c.id)) newConns.push(c);
+                            });
+                            onReorderConnections(newConns);
+
+                            // Merge groups
+                            if (res.groups) {
+                                const newGroups = [...groups];
+                                res.groups.forEach(g => {
+                                    if (!newGroups.find(ng => ng.id === g.id)) newGroups.push(g);
+                                });
+                                onUpdateGroups(newGroups);
+                            }
+                            alert('Imported successfully!');
+                        } else {
+                            alert('Import failed: ' + res.error);
+                        }
+                        setImportModal(null);
+                    }}
+                    onCancel={() => setImportModal(null)}
+                    requirePassword={importModal.data.connections.some(c => c.isEncrypted)}
+                    actionLabel="Import"
                 />
             )}
         </aside>
+    );
+};
+
+const ExportImportModal = ({ title, connections, onConfirm, onCancel, requirePassword, actionLabel }) => {
+    const [selectedIds, setSelectedIds] = useState(connections.map(c => c.id));
+    const [password, setPassword] = useState('');
+
+    const toggleId = (id) => {
+        setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+    };
+
+    return (
+        <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 3000, backdropFilter: 'blur(8px)'
+        }}>
+            <div className="card" style={{ width: '420px', padding: '24px', border: '1px solid var(--border-color)', boxShadow: '0 20px 40px rgba(0,0,0,0.5)' }}>
+                <h4 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {actionLabel === 'Export' ? <Download size={18} /> : <Upload size={18} />} {title}
+                </h4>
+
+                <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '24px', paddingRight: '4px' }}>
+                    {connections.map(c => (
+                        <div
+                            key={c.id}
+                            onClick={() => toggleId(c.id)}
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: '12px', padding: '10px',
+                                borderRadius: '8px', cursor: 'pointer', marginBottom: '4px',
+                                backgroundColor: selectedIds.includes(c.id) ? 'rgba(10, 132, 255, 0.1)' : 'transparent',
+                                border: `1px solid ${selectedIds.includes(c.id) ? 'var(--accent)' : 'transparent'}`
+                            }}
+                        >
+                            <div style={{
+                                width: '18px', height: '18px', borderRadius: '4px',
+                                border: '1px solid var(--border-color)',
+                                backgroundColor: selectedIds.includes(c.id) ? 'var(--accent)' : 'transparent',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center'
+                            }}>
+                                {selectedIds.includes(c.id) && <Check size={14} color="white" />}
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: '13px', fontWeight: '500' }}>{c.name || c.host}</div>
+                                <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{c.username}@{c.host}</div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                {requirePassword && (
+                    <div style={{ marginBottom: '24px' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: '700', color: 'var(--text-secondary)', marginBottom: '8px', textTransform: 'uppercase' }}>
+                            <Lock size={12} /> Master Encryption Password
+                        </label>
+                        <input
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="Enter password..."
+                            style={{ width: '100%' }}
+                        />
+                        <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '6px', opacity: 0.8 }}>
+                            * This password will be used to {actionLabel.toLowerCase()} your SSH credentials securely.
+                        </div>
+                    </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                    <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
+                    <button
+                        className="btn btn-primary"
+                        disabled={selectedIds.length === 0 || (requirePassword && !password)}
+                        onClick={() => onConfirm(selectedIds, password)}
+                    >
+                        {actionLabel} {selectedIds.length} items
+                    </button>
+                </div>
+            </div>
+        </div>
     );
 };
 
