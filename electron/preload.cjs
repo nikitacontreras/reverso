@@ -12,6 +12,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // SFTP
     sftpReaddir: (data) => ipcRenderer.invoke('sftp:readdir', data),
+    sftpDownload: (data) => ipcRenderer.invoke('sftp:download', data),
+    onSftpDownloadProgress: (callback) => {
+        const listener = (event, data) => callback(data);
+        ipcRenderer.on('sftp:download-progress', listener);
+        return () => ipcRenderer.removeListener('sftp:download-progress', listener);
+    },
     ping: (host) => ipcRenderer.invoke('ssh:ping', host),
     getActiveTunnels: () => ipcRenderer.invoke('tunnels:get-all'),
     detectServices: (connectionId) => ipcRenderer.invoke('ssh:detect-services', connectionId),

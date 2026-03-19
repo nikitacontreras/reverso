@@ -115,20 +115,21 @@ const PreferencesWindow = ({
                     )}
 
                     {/* Add New Alias Form */}
-                    <form onSubmit={handleAddAlias} style={{ display: 'flex', gap: '12px', padding: '16px 20px', backgroundColor: 'var(--bg-primary)' }}>
+                    <form onSubmit={handleAddAlias} style={{ display: 'flex', gap: '12px', padding: '16px 20px', backgroundColor: 'var(--bg-primary)', alignItems: 'flex-start' }}>
                         <input
-                            placeholder="Alias name (e.g. up)"
+                            placeholder="Name (e.g. up)"
                             value={newAliasName}
                             onChange={e => setNewAliasName(e.target.value.replace(/\s+/g, ''))}
-                            style={{ width: '160px', backgroundColor: 'var(--card-bg)' }}
+                            style={{ width: '160px', backgroundColor: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '10px 12px' }}
                         />
-                        <input
-                            placeholder="Command (e.g. tail -f /var/log/syslog)"
+                        <textarea
+                            placeholder="Command or Function Body (e.g. start_server.sh)"
                             value={newAliasCmd}
                             onChange={e => setNewAliasCmd(e.target.value)}
-                            style={{ flex: 1, backgroundColor: 'var(--card-bg)' }}
+                            style={{ flex: 1, backgroundColor: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '10px 12px', minHeight: '60px', resize: 'vertical', fontFamily: 'ui-monospace, monospace', fontSize: '12px', color: 'var(--text-primary)' }}
+                            rows={2}
                         />
-                        <button type="submit" className="btn btn-primary" style={{ padding: '8px 16px', fontWeight: '600', gap: '6px' }}>
+                        <button type="submit" className="btn btn-primary" style={{ padding: '8px 16px', fontWeight: '600', gap: '6px', marginTop: '2px' }}>
                             <Plus size={16} /> Add
                         </button>
                     </form>

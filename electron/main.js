@@ -620,13 +620,20 @@ ipcMain.on('ssh:shell-start', (event, { connectionId, shellId }) => {
                 }
             }
 
-            // Run injection: PS1, aliases, and a quick system info summary (MotD), then clear screen nicely.
-            // Using a leading space ignores the command from bash history on most setups. 
-            // Removed '!' from echo to prevent bash history expansion errors (event not found).
-            // Removed emojis from PS1 and MotD to prevent bash width calculation glitches (duplicate lines).
-            const motd = `echo -e '\\e[1;32mConnected successfully.\\e[0m'; echo "System Uptime: $(uptime -p 2>/dev/null || echo 'Unknown') | Ram Free: $(free -m 2>/dev/null | awk '/Mem:/ {print $4}' || echo 'N/A') MB"`;
-            const injectScript = ` export PS1="${ps1}"; ${aliasesStr} clear; ${motd};\n`;
-            stream.write(injectScript);
+            // Run injection after a short delay!
+            // This 400ms delay is CRUCIAL. It guarantees xterm.js finishes its 'fit()' 
+            // and the SSH session processes the SIGWINCH (window resize) event.
+            // If executed during resize, Bash's readline line-wrapping breaks and duplicates lines.
+            // Wrapping in stty -echo ensures the injected command isn't visually printed before executing.
+            setTimeout(() => {
+                const motd = `echo -e '\\e[1;32mConnected successfully.\\e[0m'; echo "System Uptime: $(uptime -p 2>/dev/null || echo 'Unknown') | Ram Free: $(free -m 2>/dev/null | awk '/Mem:/ {print $4}' || echo 'N/A') MB"`;
+                const injectScript = ` stty -echo; export PS1="${ps1}"; ${aliasesStr} clear; ${motd}; stty echo;\n`;
+
+                if (conn.shells.has(shellId) && !stream.destroyed) {
+                    stream.write(injectScript);
+                }
+            }, 400);
+
         } catch (err) {
             console.error('[Shell Injection Error]:', err);
         }
@@ -695,7 +702,40 @@ ipcMain.handle('sftp:readdir', async (event, { connectionId, path }) => {
         });
     });
 });
-// SFTP ... (omitted readdir for context)
+
+ipcMain.handle('sftp:download', async (event, { connectionId, remotePath, filename }) => {
+    const { filePath } = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: filename,
+        buttonLabel: 'Download',
+        title: `Download ${filename}`
+    });
+
+    if (!filePath) return { success: false, cancelled: true, error: 'Download cancelled' };
+
+    const conn = activeConnections.get(connectionId);
+    if (!conn || !conn.client) return { success: false, error: 'Not connected to server' };
+
+    return new Promise((resolve) => {
+        conn.client.sftp((err, sftp) => {
+            if (err) return resolve({ success: false, error: err.message });
+
+            sftp.fastGet(remotePath, filePath, {
+                step: (transferred, chunk, total) => {
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('sftp:download-progress', {
+                            connectionId, remotePath, transferred, total
+                        });
+                    }
+                }
+            }, (err) => {
+                sftp.end(); // close session
+                if (err) return resolve({ success: false, error: err.message });
+                resolve({ success: true, localPath: filePath });
+            });
+        });
+    });
+});
+
 ipcMain.handle('tunnels:get-all', async () => {
     const all = [];
     for (const [id, conn] of activeConnections.entries()) {
