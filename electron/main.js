@@ -609,22 +609,22 @@ ipcMain.on('ssh:shell-start', (event, { connectionId, shellId }) => {
         try {
             const cfg = conn.config || {};
             const safeName = (cfg.name || cfg.host || '').replace(/['"\\]/g, '');
-            // Beautiful Prompt exactly as requested
-            const ps1 = `\\[\\e[1;36m\\][⚡ ${safeName}]\\[\\e[0m\\] \\[\\e[34m\\]\\u@\\h\\[\\e[0m\\]:\\w $ `;
+            const ps1 = `\\[\\e[1;36m\\][${safeName}]\\[\\e[0m\\] \\[\\e[34m\\]\\u@\\h\\[\\e[0m\\]:\\w $ `;
 
             // Read aliases from config.json
             let aliasesStr = `alias logs='tail -f /var/log/syslog'; alias docker-clean='docker system prune -a';`;
             if (fs.existsSync(configPath)) {
                 const confData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
                 if (confData.settings && Array.isArray(confData.settings.aliases)) {
-                    aliasesStr = confData.settings.aliases.map(a => `alias ${a.name}='${a.command.replace(/'/g, "\\'")}'`).join('; ') + ';';
+                    aliasesStr = confData.settings.aliases.map(a => `alias ${a.name}='${a.command.replace(/'/g, "'\\''")}'`).join('; ') + ';';
                 }
             }
 
             // Run injection: PS1, aliases, and a quick system info summary (MotD), then clear screen nicely.
             // Using a leading space ignores the command from bash history on most setups. 
             // Removed '!' from echo to prevent bash history expansion errors (event not found).
-            const motd = `echo -e '\\e[1;32mConnected successfully.\\e[0m'; echo "🟢 Uptime: $(uptime -p 2>/dev/null || echo 'Unknown') | 💾 Ram Free: $(free -m 2>/dev/null | awk '/Mem:/ {print $4}' || echo 'N/A') MB"`;
+            // Removed emojis from PS1 and MotD to prevent bash width calculation glitches (duplicate lines).
+            const motd = `echo -e '\\e[1;32mConnected successfully.\\e[0m'; echo "System Uptime: $(uptime -p 2>/dev/null || echo 'Unknown') | Ram Free: $(free -m 2>/dev/null | awk '/Mem:/ {print $4}' || echo 'N/A') MB"`;
             const injectScript = ` export PS1="${ps1}"; ${aliasesStr} clear; ${motd};\n`;
             stream.write(injectScript);
         } catch (err) {
