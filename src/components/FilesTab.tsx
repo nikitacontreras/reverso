@@ -1,72 +1,93 @@
-import React, { useState, useEffect } from 'react';
+import React, { useReducer, useEffect } from 'react';
 import { Folder, File, ArrowUp, RefreshCw, AlertCircle, Download } from 'lucide-react';
 
+const initialState = {
+    currentPath: '/',
+    files: [] as any[],
+    loading: false,
+    loadingFolder: null as string | null,
+    error: null as string | null,
+    downloadProgress: {} as { [key: string]: { transferred: number, total: number } }
+};
+
+function reducer(state: typeof initialState, action: any) {
+    switch (action.type) {
+        case 'NAVIGATE_START':
+            return { ...state, loading: true, loadingFolder: action.folder, error: null };
+        case 'NAVIGATE_SUCCESS':
+            return { ...state, loading: false, loadingFolder: null, files: action.files, currentPath: action.path };
+        case 'NAVIGATE_ERROR':
+            return { ...state, loading: false, loadingFolder: null, error: action.error };
+        case 'UPDATE_PROGRESS':
+            return {
+                ...state,
+                downloadProgress: {
+                    ...state.downloadProgress,
+                    [action.path]: { transferred: action.transferred, total: action.total }
+                }
+            };
+        case 'CLEAR_PROGRESS':
+            const newProgress = { ...state.downloadProgress };
+            delete newProgress[action.path];
+            return { ...state, downloadProgress: newProgress };
+        case 'SET_ERROR':
+            return { ...state, error: action.error };
+        default:
+            return state;
+    }
+}
+
 const FilesTab = ({ currentConn }: any) => {
-    const [currentPath, setCurrentPath] = useState('/');
-    const [files, setFiles] = useState<any[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [loadingFolder, setLoadingFolder] = useState<string | null>(null);
-    const [error, setError] = useState<string | null>(null);
-    const [downloadProgress, setDownloadProgress] = useState<{ [key: string]: { transferred: number, total: number } }>({});
+    const [state, dispatch] = useReducer(reducer, initialState);
+    const { currentPath, files, loading, loadingFolder, error, downloadProgress } = state;
 
     useEffect(() => {
         const removeListener = window.electronAPI.onSftpDownloadProgress((data: any) => {
             if (data.connectionId !== currentConn?.id) return;
-            setDownloadProgress(prev => ({
-                ...prev,
-                [data.remotePath]: { transferred: data.transferred, total: data.total }
-            }));
+            dispatch({ type: 'UPDATE_PROGRESS', path: data.remotePath, transferred: data.transferred, total: data.total });
         });
         return () => removeListener();
     }, [currentConn?.id]);
 
-    const loadDirectory = async (pathObj: string) => {
+    const loadDirectory = async (pathObj: string, folderName: string | null = null) => {
         if (!currentConn || currentConn.status !== 'connected') return;
-        setLoading(true);
-        setError(null);
+        dispatch({ type: 'NAVIGATE_START', folder: folderName });
         try {
             const result = await window.electronAPI.sftpReaddir({
                 connectionId: currentConn.id,
                 path: pathObj
             });
             if (result.success) {
-                setFiles(result.list);
-                setCurrentPath(pathObj);
+                dispatch({ type: 'NAVIGATE_SUCCESS', files: result.list, path: pathObj });
             } else {
-                setError(result.error);
+                dispatch({ type: 'NAVIGATE_ERROR', error: result.error });
             }
         } catch (err: any) {
-            setError(err.message || 'Failed to read directory');
-        } finally {
-            setLoading(false);
-            setLoadingFolder(null);
+            dispatch({ type: 'NAVIGATE_ERROR', error: err.message || 'Failed to read directory' });
         }
     };
 
     useEffect(() => {
-        // Load files when connection acts connected. Don't auto-fetch if we already have files, unless it changed
         if (currentConn && currentConn.status === 'connected' && files.length === 0) {
             loadDirectory(currentPath);
         }
     }, [currentConn?.status]);
 
     const handleNavigate = (file: any) => {
-        if (loading) return; // Prevent multiple clicks while loading
+        if (loading) return;
 
         const isDir = file.longname.startsWith('d');
         const separator = currentPath.endsWith('/') ? '' : '/';
         const itemPath = `${currentPath}${separator}${file.filename}`;
 
         if (isDir) {
-            if (file.filename === '.' || file.filename === '..') return; // ignore these if they appear
-            setLoadingFolder(file.filename);
-            loadDirectory(itemPath);
+            if (file.filename === '.' || file.filename === '..') return;
+            loadDirectory(itemPath, file.filename);
         }
     };
 
     const handleDownload = async (remotePath: string, filename: string) => {
-        // Optimistically set 0% progress to show UI feedback instantly
-        setDownloadProgress(prev => ({ ...prev, [remotePath]: { transferred: 0, total: 1 } }));
+        dispatch({ type: 'UPDATE_PROGRESS', path: remotePath, transferred: 0, total: 1 });
         try {
             const result = await window.electronAPI.sftpDownload({
                 connectionId: currentConn.id,
@@ -74,18 +95,13 @@ const FilesTab = ({ currentConn }: any) => {
                 filename
             });
             if (!result.success && !result.cancelled) {
-                setError(result.error);
+                dispatch({ type: 'SET_ERROR', error: result.error });
             }
         } catch (err: any) {
-            setError(err.message || 'Download failed');
+            dispatch({ type: 'SET_ERROR', error: err.message || 'Download failed' });
         } finally {
-            // Clear progress after short delay so user sees 100% completion briefly
             setTimeout(() => {
-                setDownloadProgress(prev => {
-                    const newProg = { ...prev };
-                    delete newProg[remotePath];
-                    return newProg;
-                });
+                dispatch({ type: 'CLEAR_PROGRESS', path: remotePath });
             }, 1000);
         }
     };
