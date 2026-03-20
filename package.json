@@ -8,6 +8,10 @@
   },
   "main": "electron/main.js",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nikitacontreras/reverso"
+  },
   "scripts": {
     "vite:dev": "vite",
     "electron:dev": "electron .",
@@ -23,6 +27,10 @@
   "build": {
     "appId": "com.reverso.app",
     "productName": "Reverso",
+    "publish": {
+      "provider": "github",
+      "releaseType": "release"
+    },
     "directories": {
       "output": "release"
     },

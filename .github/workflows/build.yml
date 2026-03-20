@@ -103,8 +103,10 @@ jobs:
       - name: Build and Publish Electron
         run: |
           if [ "${{ github.event_name }}" == "push" ]; then
-            npm run electron:build -- --publish always -c.releaseInfo.releaseNotesFile=RELEASE_NOTES.md -c.publish.releaseType=release
+            # Build and Publish using configuration in package.json
+            npm run electron:build -- --publish always -c.releaseInfo.releaseNotesFile=RELEASE_NOTES.md
           else
+            # Only build for validation on PRs
             npm run electron:build
           fi
         env:
