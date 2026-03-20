@@ -14,7 +14,7 @@ permissions:
 jobs:
   # Prepare the release: Bump version and create tag
   prepare:
-    if: github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore(release):')
+    if: ${{ github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore(release):') }}
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.bump.outputs.tag }}
@@ -51,7 +51,10 @@ jobs:
           git add package.json package-lock.json
           
           # Create commit with changelog as body
-          git commit -m "chore(release): $TAG" -m "$CHANGELOG"
+          echo "chore(release): $TAG" > msg.txt
+          echo "" >> msg.txt
+          echo "$CHANGELOG" >> msg.txt
+          git commit -F msg.txt
           git tag "$TAG"
           
           # Push back to main
@@ -62,8 +65,7 @@ jobs:
   # Build binaries for all platforms
   build:
     needs: prepare
-    # Run on PRs OR after a successful prepare step
-    if: always() && !failed() && !cancelled() && (github.event_name == 'pull_request' || needs.prepare.result == 'success')
+    if: ${{ always() && (github.event_name == 'pull_request' || needs.prepare.result == 'success') }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -72,7 +74,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Use the newly created tag on push, or the branch on PR
           ref: ${{ needs.prepare.outputs.tag || github.sha }}
           fetch-depth: 0
 
@@ -93,22 +94,18 @@ jobs:
         shell: bash
         run: |
           if [ "${{ github.event_name }}" == "push" ]; then
-            # Extract commit body (changelog) from the latest commit and save to file
+            # Extract commit body (changelog) from the latest commit
             git log -1 --pretty=format:"%b" > RELEASE_NOTES.md
-            echo "has_notes=true" >> "$GITHUB_OUTPUT"
           else
-            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+            echo "Pull request build" > RELEASE_NOTES.md
           fi
 
       - name: Build and Publish Electron
         run: |
           if [ "${{ github.event_name }}" == "push" ]; then
-            # Build and Publish to GitHub Releases
             npm run electron:build -- --publish always -c.releaseInfo.releaseNotesFile=RELEASE_NOTES.md -c.publish.releaseType=release
           else
-            # Only Build for validation
             npm run electron:build
           fi
-
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
