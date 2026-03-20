@@ -8,17 +8,73 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-
+  # Prepare the release: Bump version and create tag
+  prepare:
+    if: github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore(release):')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Git Config
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Generate Changelog and Bump Version
+        id: bump
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            CHANGELOG=$(git log --pretty=format:"* %s (%h)")
+          else
+            CHANGELOG=$(git log --pretty=format:"* %s (%h)" $LAST_TAG..HEAD)
+          fi
+          
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="No changes documented."
+          fi
+          
+          # Bump version (patch)
+          npm version patch --no-git-tag-version
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          TAG="v$NEW_VERSION"
+          
+          git add package.json package-lock.json
+          
+          # Create commit with changelog as body
+          git commit -m "chore(release): $TAG" -m "$CHANGELOG"
+          git tag "$TAG"
+          
+          # Push back to main
+          git push origin main --tags
+          
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+  # Build binaries for all platforms
+  build:
+    needs: prepare
+    # Run on PRs OR after a successful prepare step
+    if: always() && !failed() && !cancelled() && (github.event_name == 'pull_request' || needs.prepare.result == 'success')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Use the newly created tag on push, or the branch on PR
+          ref: ${{ needs.prepare.outputs.tag || github.sha }}
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -32,7 +88,27 @@ jobs:
       - name: Build Vite
         run: npm run vite:build
 
-      - name: Build Electron
-        run: npm run electron:build
+      - name: Extract Release Notes
+        id: notes
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            # Extract commit body (changelog) from the latest commit and save to file
+            git log -1 --pretty=format:"%b" > RELEASE_NOTES.md
+            echo "has_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and Publish Electron
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            # Build and Publish to GitHub Releases
+            npm run electron:build -- --publish always -c.releaseInfo.releaseNotesFile=RELEASE_NOTES.md -c.publish.releaseType=release
+          else
+            # Only Build for validation
+            npm run electron:build
+          fi
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
