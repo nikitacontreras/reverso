@@ -17,6 +17,7 @@ let mainWindow;
 let tray = null;
 const activeConnections = new Map(); // id -> { client, tunnels: Map, shellStream, distro, sshPort }
 const tunnelTraffic = new Map(); // tunnelId -> { up, down, lastUpdate }
+const cloudflaredTunnels = new Map(); // localPort -> { process, url, status }
 
 // SILENCE POPUPS: Capture uncaught exceptions to prevent Electron's error dialog
 process.on('uncaughtException', (error) => {
@@ -206,6 +207,42 @@ function updateTrayMenu() {
     tray.setToolTip(`Reverso (${connectedCount} connected)`);
 }
 
+async function cleanupAllConnections() {
+    console.log('Cleaning up all active connections and tunnels...');
+
+    // Stop Cloudflare tunnels
+    for (const [port, tunnel] of cloudflaredTunnels.entries()) {
+        try {
+            tunnel.process.kill('SIGKILL');
+        } catch (e) { }
+    }
+    cloudflaredTunnels.clear();
+
+    // Stop SSH connections and tunnels
+    for (const [id, conn] of activeConnections.entries()) {
+        try {
+            if (conn.tunnels) {
+                for (const item of conn.tunnels.values()) {
+                    if (item.activeSockets) {
+                        for (const sock of item.activeSockets) sock.destroy();
+                    }
+                    item.server.close();
+                }
+            }
+            if (conn.shells) {
+                for (const shell of conn.shells.values()) {
+                    shell.destroy();
+                }
+            }
+            conn.client.removeAllListeners('close');
+            conn.client.removeAllListeners('error');
+            conn.client.destroy(); // Force-close the socket
+        } catch (e) { }
+    }
+    activeConnections.clear();
+    if (tray) updateTrayMenu();
+}
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1100,
@@ -226,6 +263,15 @@ function createWindow() {
 
     mainWindow.loadURL(startUrl);
 
+    // Handle reloads and navigation
+    mainWindow.webContents.on('did-start-loading', () => {
+        cleanupAllConnections();
+    });
+
+    mainWindow.webContents.on('will-navigate', () => {
+        cleanupAllConnections();
+    });
+
     mainWindow.once('ready-to-show', () => {
         mainWindow.show();
         createTray();
@@ -240,7 +286,10 @@ function createWindow() {
 }
 
 app.whenReady().then(createWindow);
-app.on('before-quit', () => app.isQuitting = true);
+app.on('before-quit', async (e) => {
+    app.isQuitting = true;
+    await cleanupAllConnections();
+});
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
@@ -588,7 +637,7 @@ ipcMain.handle('ssh:detect-services', async (event, connectionId) => {
 });
 
 // Terminal / Shell
-ipcMain.on('ssh:shell-start', (event, { connectionId, shellId }) => {
+ipcMain.on('ssh:shell-start', (event, { connectionId, shellId, rows = 24, cols = 80 }) => {
     const conn = activeConnections.get(connectionId);
     if (!conn) return;
 
@@ -597,7 +646,9 @@ ipcMain.on('ssh:shell-start', (event, { connectionId, shellId }) => {
     // If shell already exists, don't restart it
     if (conn.shells.has(shellId)) return;
 
-    conn.client.shell((err, stream) => {
+    const windowInfo = { rows, cols, term: 'xterm-256color' };
+
+    conn.client.shell(windowInfo, (err, stream) => {
         if (err) {
             console.error(`[Shell Error] Could not start shell ${shellId}:`, err.message);
             return;
@@ -761,6 +812,127 @@ ipcMain.handle('ssh:ping', async (event, host) => {
         exec(`ping -c 1 -t 1 ${host}`, (err) => {
             if (err) return resolve({ success: false, latency: -1 });
             resolve({ success: true, latency: Date.now() - start });
+        });
+    });
+});
+
+// Cloudflared Integration
+ipcMain.handle('cloudflare:check', async () => {
+    return new Promise((resolve) => {
+        exec('cloudflared --version', (err, stdout) => {
+            if (err) resolve({ success: false });
+            else resolve({ success: true, version: stdout.trim() });
+        });
+    });
+});
+
+ipcMain.handle('cloudflare:start', async (event, localPort) => {
+    if (cloudflaredTunnels.has(localPort)) {
+        return { success: true, url: cloudflaredTunnels.get(localPort).url };
+    }
+
+    return new Promise((resolve) => {
+        const port = parseInt(localPort);
+        const child = exec(`cloudflared tunnel --url http://127.0.0.1:${port}`);
+
+        let url = '';
+        let status = 'starting';
+
+        child.stderr.on('data', (data) => {
+            const line = data.toString();
+            // Look for the trycloudflare URL
+            const match = line.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+            if (match && !url) {
+                url = match[0];
+                status = 'connected';
+                cloudflaredTunnels.set(localPort, { process: child, url, status });
+                resolve({ success: true, url });
+
+                if (mainWindow) {
+                    mainWindow.webContents.send('cloudflare:status', { localPort, url, status: 'connected' });
+                }
+            }
+        });
+
+        child.on('close', () => {
+            cloudflaredTunnels.delete(localPort);
+            if (mainWindow) {
+                mainWindow.webContents.send('cloudflare:status', { localPort, status: 'disconnected' });
+            }
+        });
+
+        child.on('error', (err) => {
+            if (status === 'starting') {
+                resolve({ success: false, error: err.message });
+            }
+        });
+
+        // Timeout if it takes too long to get a URL
+        setTimeout(() => {
+            if (status === 'starting') {
+                child.kill();
+                resolve({ success: false, error: 'Timeout waiting for Cloudflare URL' });
+            }
+        }, 30000);
+    });
+});
+
+ipcMain.handle('cloudflare:stop', async (event, localPort) => {
+    const tunnel = cloudflaredTunnels.get(localPort);
+    if (tunnel) {
+        tunnel.process.kill();
+        cloudflaredTunnels.delete(localPort);
+        return { success: true };
+    }
+    return { success: false };
+});
+
+ipcMain.handle('cloudflare:list', async () => {
+    const list = [];
+    cloudflaredTunnels.forEach((val, key) => {
+        list.push({ localPort: key, url: val.url, status: val.status });
+    });
+    return list;
+});
+
+// System Utilities
+ipcMain.handle('system:detect-local-ports', async () => {
+    return new Promise((resolve) => {
+        const cmd = process.platform === 'win32'
+            ? 'netstat -ano | findstr LISTENING'
+            : 'lsof -i -P -n | grep LISTEN';
+
+        exec(cmd, (err, stdout) => {
+            if (err) return resolve({ success: false, error: err.message });
+
+            const lines = stdout.split('\n');
+            const ports = new Set();
+            const services = [];
+
+            lines.forEach(line => {
+                if (!line.trim()) return;
+
+                let port, name;
+                if (process.platform === 'win32') {
+                    // TCP    0.0.0.0:3000           0.0.0.0:0              LISTENING       1234
+                    const match = line.match(/:(\d+)\s+.*LISTENING/);
+                    if (match) port = parseInt(match[1]);
+                } else {
+                    // node      20931 nikitastrike   23u  IPv6 0x...      0t0  TCP *:3000 (LISTEN)
+                    const parts = line.split(/\s+/);
+                    name = parts[0];
+                    const portPart = parts[parts.length - 2]; // *:3000 or localhost:3000
+                    const match = portPart.match(/:(\d+)$/);
+                    if (match) port = parseInt(match[1]);
+                }
+
+                if (port && !ports.has(port)) {
+                    ports.add(port);
+                    services.push({ port, name: name || 'Unknown' });
+                }
+            });
+
+            resolve({ success: true, services });
         });
     });
 });

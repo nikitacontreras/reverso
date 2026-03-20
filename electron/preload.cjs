@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ping: (host) => ipcRenderer.invoke('ssh:ping', host),
     getActiveTunnels: () => ipcRenderer.invoke('tunnels:get-all'),
     detectServices: (connectionId) => ipcRenderer.invoke('ssh:detect-services', connectionId),
+    detectLocalPorts: () => ipcRenderer.invoke('system:detect-local-ports'),
 
     // Terminal and Events
     startShell: (data) => ipcRenderer.send('ssh:shell-start', data),
@@ -52,5 +53,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
         const listener = (event, data) => callback(data);
         ipcRenderer.on('network:event', listener);
         return () => ipcRenderer.removeListener('network:event', listener);
+    },
+
+    // Cloudflare Tunnel
+    checkCloudflare: () => ipcRenderer.invoke('cloudflare:check'),
+    startCloudflare: (localPort) => ipcRenderer.invoke('cloudflare:start', localPort),
+    stopCloudflare: (localPort) => ipcRenderer.invoke('cloudflare:stop', localPort),
+    listCloudflare: () => ipcRenderer.invoke('cloudflare:list'),
+    onCloudflareStatus: (callback) => {
+        const listener = (event, data) => callback(data);
+        ipcRenderer.on('cloudflare:status', listener);
+        return () => ipcRenderer.removeListener('cloudflare:status', listener);
     },
 });
