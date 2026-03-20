@@ -2,6 +2,10 @@
   "name": "reverso",
   "version": "1.0.0",
   "description": "SSH Local Port Forwarding Manager",
+  "author": {
+    "name": "Nicolás Contreras",
+    "email": "nicolas.contreras@connectiva.com.co"
+  },
   "main": "electron/main.js",
   "type": "module",
   "scripts": {
