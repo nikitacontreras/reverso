@@ -27,7 +27,7 @@ const PreferencesWindow = ({
     };
 
     return (
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 24px', maxWidth: '800px', margin: '0 auto', width: '100%' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '24px', width: '100%', height: '100%' }}>
             <h2 style={{ fontSize: '24px', fontWeight: '700', margin: '32px 0 24px 0', letterSpacing: '-0.5px' }}>Preferences</h2>
 
             {/* General Section */}
