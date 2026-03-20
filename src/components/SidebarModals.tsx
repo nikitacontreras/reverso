@@ -156,30 +156,33 @@ export const GroupModal = ({ title, initialData, onConfirm, onCancel, iconMap, c
                         role="radiogroup"
                         aria-label="Select icon"
                     >
-                        {Object.entries(iconMap).map(([key, IconComp]) => (
-                            <div
-                                key={key}
-                                onClick={() => setSelectedIcon(key)}
-                                onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setSelectedIcon(key)}
-                                tabIndex={0}
-                                role="radio"
-                                aria-checked={selectedIcon === key}
-                                style={{
-                                    height: '36px',
-                                    borderRadius: '8px',
-                                    cursor: 'pointer',
-                                    backgroundColor: selectedIcon === key ? 'var(--bg-primary)' : 'rgba(255,255,255,0.03)',
-                                    border: `1px solid ${selectedIcon === key ? 'var(--accent)' : 'transparent'}`,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    transition: 'background-color 0.15s, border-color 0.15s, box-shadow 0.15s',
-                                    boxShadow: selectedIcon === key ? '0 0 0 3px rgba(10, 132, 255, 0.2)' : 'none'
-                                }}
-                            >
-                                <IconComp size={18} color={selectedIcon === key ? selectedColor : 'var(--text-secondary)'} style={{ opacity: selectedIcon === key ? 1 : 0.6 }} />
-                            </div>
-                        ))}
+                        {Object.entries(iconMap).map(([key, IconComp]) => {
+                            const TypedIcon = IconComp as any;
+                            return (
+                                <div
+                                    key={key}
+                                    onClick={() => setSelectedIcon(key)}
+                                    onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setSelectedIcon(key)}
+                                    tabIndex={0}
+                                    role="radio"
+                                    aria-checked={selectedIcon === key}
+                                    style={{
+                                        height: '36px',
+                                        borderRadius: '8px',
+                                        cursor: 'pointer',
+                                        backgroundColor: selectedIcon === key ? 'var(--bg-primary)' : 'rgba(255,255,255,0.03)',
+                                        border: `1px solid ${selectedIcon === key ? 'var(--accent)' : 'transparent'}`,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        transition: 'background-color 0.15s, border-color 0.15s, box-shadow 0.15s',
+                                        boxShadow: selectedIcon === key ? '0 0 0 3px rgba(10, 132, 255, 0.2)' : 'none'
+                                    }}
+                                >
+                                    {TypedIcon && <TypedIcon size={18} color={selectedIcon === key ? selectedColor : 'var(--text-secondary)'} style={{ opacity: selectedIcon === key ? 1 : 0.6 }} />}
+                                </div>
+                            );
+                        })}
                     </div>
                     <div
                         style={{ display: 'flex', gap: '6px' }}

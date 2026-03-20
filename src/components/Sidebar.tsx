@@ -28,7 +28,8 @@ const Sidebar = ({
     onConnectAll,
     isDashboardOpen,
     isLocalMachineOpen,
-    onOpenLocalMachine
+    onOpenLocalMachine,
+    showToast
 }) => {
     const [search, setSearch] = useState('');
     const [contextMenu, setContextMenu] = useState(null); // { x, y, type, id }
@@ -339,8 +340,8 @@ const Sidebar = ({
 
             <div style={{ flex: 1, overflowY: 'auto', margin: '0 -4px', padding: '0 4px' }}>
                 {filteredGroups.map(group => (
+                    <React.Fragment key={group.id}>
                         <div
-                            key={group.id}
                             role="button"
                             tabIndex={0}
                             onDrop={(e) => { e.stopPropagation(); handleDrop(e, group.id); }}
@@ -367,8 +368,9 @@ const Sidebar = ({
                         >
                             {group.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                             {(() => {
-                                const IconComp = iconMap[group.icon || 'folder'] || Folder;
-                                return <IconComp size={18} fill={group.color || 'var(--text-secondary)'} color={group.color || 'var(--text-secondary)'} style={{ opacity: 1 }} />;
+                                const IconComp = (iconMap as any)[group.icon || 'folder'] || Folder;
+                                const TypedIcon = IconComp as any;
+                                return <TypedIcon size={18} fill={group.color || 'var(--text-secondary)'} color={group.color || 'var(--text-secondary)'} style={{ opacity: 1 }} />;
                             })()}
                             <span style={{
                                 flex: 1,
@@ -401,7 +403,7 @@ const Sidebar = ({
                                 )}
                             </div>
                         )}
-                    </div>
+                    </React.Fragment>
                 ))}
 
                 {ungroupedConnections.map(renderConnection)}
@@ -481,110 +483,110 @@ const Sidebar = ({
             </div>
 
             {
-        contextMenu && (
-            <div
-                style={{
-                    position: 'fixed',
-                    top: contextMenu.y,
-                    left: contextMenu.x,
-                    backgroundColor: 'var(--card-bg)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '8px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-                    padding: '4px',
-                    zIndex: 1000,
-                    minWidth: '160px'
-                }}
-            >
-                {contextMenu.type === 'connection' && (
-                    <>
-                        <ContextItem icon={<Play size={14} />} label="Connect" onClick={() => { onConnect(contextMenu.id); setContextMenu(null); }} />
-                        <ContextItem icon={<Power size={14} />} label="Disconnect" onClick={() => { onDisconnect(contextMenu.id); setContextMenu(null); }} destructive />
-                        <div style={{ height: '1px', backgroundColor: 'var(--border-color)', margin: '4px 0' }} />
-                        <ContextItem icon={<Edit2 size={14} />} label="Edit" onClick={() => { onSelectConnection(contextMenu.id); onEdit(); setContextMenu(null); }} />
-                        <ContextItem icon={<Trash2 size={14} />} label="Delete" onClick={(e) => { onDeleteConnection(contextMenu.id, e); setContextMenu(null); }} destructive />
-                    </>
-                )}
-                {contextMenu.type === 'group' && (
-                    <>
-                        <ContextItem icon={<Play size={14} />} label="Connect All" onClick={() => { onConnectAll(contextMenu.id); setContextMenu(null); }} />
-                        <div style={{ height: '1px', backgroundColor: 'var(--border-color)', margin: '4px 0' }} />
-                        <ContextItem icon={<Edit2 size={14} />} label="Customize" onClick={() => editGroup(contextMenu.id)} />
-                        <ContextItem icon={<Trash2 size={14} />} label="Delete Group" onClick={() => deleteGroup(contextMenu.id)} destructive />
-                    </>
-                )}
-            </div>
-        )
-    }
+                contextMenu && (
+                    <div
+                        style={{
+                            position: 'fixed',
+                            top: contextMenu.y,
+                            left: contextMenu.x,
+                            backgroundColor: 'var(--card-bg)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '8px',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+                            padding: '4px',
+                            zIndex: 1000,
+                            minWidth: '160px'
+                        }}
+                    >
+                        {contextMenu.type === 'connection' && (
+                            <>
+                                <ContextItem icon={<Play size={14} />} label="Connect" onClick={() => { onConnect(contextMenu.id); setContextMenu(null); }} />
+                                <ContextItem icon={<Power size={14} />} label="Disconnect" onClick={() => { onDisconnect(contextMenu.id); setContextMenu(null); }} destructive />
+                                <div style={{ height: '1px', backgroundColor: 'var(--border-color)', margin: '4px 0' }} />
+                                <ContextItem icon={<Edit2 size={14} />} label="Edit" onClick={() => { onSelectConnection(contextMenu.id); onEdit(); setContextMenu(null); }} />
+                                <ContextItem icon={<Trash2 size={14} />} label="Delete" onClick={(e) => { onDeleteConnection(contextMenu.id, e); setContextMenu(null); }} destructive />
+                            </>
+                        )}
+                        {contextMenu.type === 'group' && (
+                            <>
+                                <ContextItem icon={<Play size={14} />} label="Connect All" onClick={() => { onConnectAll(contextMenu.id); setContextMenu(null); }} />
+                                <div style={{ height: '1px', backgroundColor: 'var(--border-color)', margin: '4px 0' }} />
+                                <ContextItem icon={<Edit2 size={14} />} label="Customize" onClick={() => editGroup(contextMenu.id)} />
+                                <ContextItem icon={<Trash2 size={14} />} label="Delete Group" onClick={() => deleteGroup(contextMenu.id)} destructive />
+                            </>
+                        )}
+                    </div>
+                )
+            }
 
-    {
-        groupModalData && (
-            <GroupModal
-                title={groupModalData.title}
-                initialData={{ name: groupModalData.name || '', icon: groupModalData.icon || 'folder', color: groupModalData.color || '#8e8e93' }}
-                onConfirm={groupModalData.onConfirm}
-                onCancel={() => setGroupModalData(null)}
-                iconMap={iconMap}
-                colors={colors}
-            />
-        )
-    }
+            {
+                groupModalData && (
+                    <GroupModal
+                        title={groupModalData.title}
+                        initialData={{ name: groupModalData.name || '', icon: groupModalData.icon || 'folder', color: groupModalData.color || '#8e8e93' }}
+                        onConfirm={groupModalData.onConfirm}
+                        onCancel={() => setGroupModalData(null)}
+                        iconMap={iconMap}
+                        colors={colors}
+                    />
+                )
+            }
 
-    {
-        exportModal && (
-            <ExportImportModal
-                title="Export Connections"
-                actionLabel="Export"
-                connections={connections}
-                onConfirm={async (selectedIds, password) => {
-                    const res = await window.electronAPI.configExport({ connectionIds: selectedIds, password });
-                    if (res.success) showToast('Exported successfully!', 'success');
-                    else if (res.error !== 'Cancelled') showToast('Export failed: ' + res.error, 'error');
-                    setExportModal(null);
-                }}
-                onCancel={() => setExportModal(null)}
-                requirePassword={true}
-            />
-        )
-    }
+            {
+                exportModal && (
+                    <ExportImportModal
+                        title="Export Connections"
+                        actionLabel="Export"
+                        connections={connections}
+                        onConfirm={async (selectedIds, password) => {
+                            const res = await window.electronAPI.configExport({ connectionIds: selectedIds, password });
+                            if (res.success) showToast('Exported successfully!', 'success');
+                            else if (res.error !== 'Cancelled') showToast('Export failed: ' + res.error, 'error');
+                            setExportModal(null);
+                        }}
+                        onCancel={() => setExportModal(null)}
+                        requirePassword={true}
+                    />
+                )
+            }
 
-    {
-        importModal && (
-            <ExportImportModal
-                title="Select Connections to Import"
-                actionLabel="Import"
-                connections={importModal.connections}
-                onConfirm={async (selectedIds, password) => {
-                    const res = await window.electronAPI.configImportExecute({
-                        data: importModal.data,
-                        password,
-                        connectionIds: selectedIds
-                    });
-                    if (res.success) {
-                        const newConns = [...connections];
-                        res.decryptedConnections.forEach(c => {
-                            if (!newConns.find(nc => nc.id === c.id)) newConns.push(c);
-                        });
-                        onReorderConnections(newConns);
-
-                        if (res.groups) {
-                            const newGroups = [...groups];
-                            res.groups.forEach(g => {
-                                if (!newGroups.find(ng => ng.id === g.id)) newGroups.push(g);
+            {
+                importModal && (
+                    <ExportImportModal
+                        title="Select Connections to Import"
+                        actionLabel="Import"
+                        connections={importModal.connections}
+                        onConfirm={async (selectedIds, password) => {
+                            const res = await window.electronAPI.configImportExecute({
+                                data: importModal.data,
+                                password,
+                                connectionIds: selectedIds
                             });
-                            onUpdateGroups(newGroups);
-                        }
-                        showToast('Imported successfully!', 'success');
-                    } else {
-                        showToast('Import failed: ' + res.error, 'error');
-                    }
-                    setImportModal(null);
-                }}
-                onCancel={() => setImportModal(null)}
-                requirePassword={importModal.data.connections.some(c => c.isEncrypted)}
-            />
-        )
-    }
+                            if (res.success) {
+                                const newConns = [...connections];
+                                res.decryptedConnections.forEach(c => {
+                                    if (!newConns.find(nc => nc.id === c.id)) newConns.push(c);
+                                });
+                                onReorderConnections(newConns);
+
+                                if (res.groups) {
+                                    const newGroups = [...groups];
+                                    res.groups.forEach(g => {
+                                        if (!newGroups.find(ng => ng.id === g.id)) newGroups.push(g);
+                                    });
+                                    onUpdateGroups(newGroups);
+                                }
+                                showToast('Imported successfully!', 'success');
+                            } else {
+                                showToast('Import failed: ' + res.error, 'error');
+                            }
+                            setImportModal(null);
+                        }}
+                        onCancel={() => setImportModal(null)}
+                        requirePassword={importModal.data.connections.some(c => c.isEncrypted)}
+                    />
+                )
+            }
         </aside >
     );
 };

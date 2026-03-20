@@ -155,13 +155,6 @@ export default function TerminalView({ connection, session, onAddTab, onRemoveTa
                             transition: 'background-color 0.2s, color 0.2s',
                         }}
                     >
-                        cursor: 'pointer',
-                        borderStyle: 'solid',
-                        borderWidth: '1px 1px 0 1px',
-                        borderColor: session.activeId === tab.id ? '#3a3a3c' : 'transparent',
-                        userSelect: 'none'
-                        }}
-                    >
                         <span>Terminal {idx + 1}</span>
                         <X
                             size={12}

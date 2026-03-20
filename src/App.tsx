@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useState, useEffect, useReducer, Suspense } from 'react';
 import { AlertCircle, Edit2, Power } from 'lucide-react';
 
 // Components
@@ -278,12 +278,14 @@ export default function App() {
                     onOpenLocalMachine={() => dispatch({ type: 'SET_VIEW', payload: { currentView: 'local', selectedConnection: null } })}
                     onDeleteConnection={deleteConnection}
                     onUpdateGroups={setGroups}
+                    onReorderConnections={setConnections}
                     onConnect={handleConnectAndSelect}
                     onDisconnect={handleDisconnect}
-                    onEdit={() => {
-                        const conn = connections.find(c => c.id === view.selectedConnection);
+                    onEdit={(id) => {
+                        const conn = connections.find(c => c.id === id);
                         if (conn) {
                             dispatch({ type: 'SET_FORMS', payload: { connectionForm: { ...conn }, isEditingConnection: true } });
+                            dispatch({ type: 'SET_VIEW', payload: { currentView: 'adding', selectedConnection: id } });
                         }
                     }}
                     onConnectAll={(groupId) => {
@@ -292,6 +294,7 @@ export default function App() {
                             if (connections.find(c => c.id === id)?.status === 'disconnected') handleConnectAndSelect(id);
                         });
                     }}
+                    showToast={showToast}
                 />
 
                 <MainContent
@@ -451,6 +454,7 @@ const ConnectionView = ({ conn, activeTab, forms, data, onDispatch, onDisconnect
                         onToggleTunnel={(tid: string) => onHandleToggleTunnel(conn.id, tid)}
                         onDeleteTunnel={(tid: string) => onDeleteTunnel(conn.id, tid)}
                         editingTunnelId={forms.editingTunnelId}
+                        setEditingTunnelId={(v: string | null) => onDispatch({ type: 'SET_FORMS', payload: { editingTunnelId: v } })}
                         onEditTunnel={(tid: string) => {
                             const t = conn.tunnels.find((tun: any) => tun.id === tid);
                             onDispatch({ type: 'SET_FORMS', payload: { tunnelForm: { remoteHost: t.remoteHost, remotePort: t.remotePort.toString(), localPort: t.localPort.toString() }, editingTunnelId: tid } });
@@ -497,7 +501,7 @@ const Modals = ({ view, forms, config, onDispatch, onHandleConnectAndSelect, set
                     <ConnectionForm
                         form={forms.connectionForm}
                         setForm={(f: any) => onDispatch({ type: 'SET_FORMS', payload: { connectionForm: f } })}
-                        onSubmit={(e: any) => {
+                        onSave={(e: any) => {
                             e.preventDefault();
                             if (forms.isEditingConnection) {
                                 setConnections((prev: any[]) => prev.map(c => c.id === view.selectedConnection ? { ...c, ...forms.connectionForm } : c));
@@ -539,7 +543,6 @@ const Modals = ({ view, forms, config, onDispatch, onHandleConnectAndSelect, set
                         setPersistTerminal={(v: boolean) => onDispatch({ type: 'SET_CONFIG', payload: { persistTerminal: v } })}
                         aliases={config.aliases}
                         setAliases={(v: any[]) => onDispatch({ type: 'SET_CONFIG', payload: { aliases: v } })}
-                        onClose={() => onDispatch({ type: 'SET_VIEW', payload: { currentView: 'dashboard' } })}
                     />
                 </div>
             </div>
