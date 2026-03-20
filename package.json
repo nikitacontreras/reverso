@@ -8,8 +8,44 @@
     "vite:dev": "vite",
     "electron:dev": "electron .",
     "dev": "concurrently \"npm run vite:dev\" \"wait-on http://localhost:3000 && npm run electron:dev\"",
-    "build": "vite build",
+    "vite:build": "vite build",
+    "electron:build": "electron-builder",
+    "dist": "npm run vite:build && npm run electron:build",
+    "build": "npm run vite:build",
     "preview": "vite preview"
+  },
+  "build": {
+    "appId": "com.reverso.app",
+    "productName": "Reverso",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb",
+        "zip"
+      ],
+      "category": "Development"
+    }
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -29,6 +65,7 @@
     "@vitejs/plugin-react": "^4.3.1",
     "concurrently": "^9.2.1",
     "electron": "^31.0.0",
+    "electron-builder": "^26.8.1",
     "typescript": "^5.9.3",
     "vite": "^5.3.1",
     "wait-on": "^9.0.4"
