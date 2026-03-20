@@ -1,6 +1,6 @@
 {
   "name": "reverso",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "SSH Local Port Forwarding Manager",
   "author": {
     "name": "Nicolás Contreras",
